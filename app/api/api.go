@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/DracoR22/villain_api/app/types"
+	"github.com/DracoR22/villain_api/app/utils"
 	"github.com/DracoR22/villain_api/storage"
 	"github.com/gorilla/mux"
 )
@@ -30,7 +32,10 @@ func (s *APIServer) Run() {
 
 	// Accounts
 	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/:id", makeHttpHandleFunc(s.handleGetAccountByID))
+	router.HandleFunc("/account/{id}", WithJWTAuth(makeHttpHandleFunc(s.handleGetAccountByID)))
+
+	// Transfer
+	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer))
 
 	log.Println("JSON API server running on port: ", s.listenAddr)
 
@@ -45,9 +50,6 @@ func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error 
 	if r.Method == "POST" {
 		return s.handleCreateAccount(w, r)
 	}
-	if r.Method == "DELETE" {
-		return s.handleDeleteAccount(w, r)
-	}
 
 	return fmt.Errorf("Method not alowed %s", r.Method)
 }
@@ -59,16 +61,33 @@ func (s *APIServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 
-	return WriteJSON(w, http.StatusOK, accounts)
+	return utils.WriteJSON(w, http.StatusOK, accounts)
 }
 
 // ---------------------------------------------------//GET ACCOUNT BY ID//------------------------------------//
 func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request) error {
-	id := mux.Vars(r)["id"]
+	if r.Method == "GET" {
 
-	fmt.Println(id)
+		// Get Id from Params
+		id, err := getID(r)
+		if err != nil {
+			return err
+		}
 
-	return WriteJSON(w, http.StatusOK, &types.Account{})
+		account, err := s.store.GetAccountByID(id)
+
+		if err != nil {
+			return err
+		}
+
+		return utils.WriteJSON(w, http.StatusOK, account)
+	}
+
+	if r.Method == "DELETE" {
+		return s.handleDeleteAccount(w, r)
+	}
+
+	return fmt.Errorf("method not allowed %s", r.Method)
 }
 
 // ---------------------------------------------------//CREATE ACCOUNT//-------------------------------------//
@@ -88,37 +107,79 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 
-	return WriteJSON(w, http.StatusOK, account)
+	return utils.WriteJSON(w, http.StatusOK, account)
 }
 
 // ---------------------------------------------------//DELETE ACCOUNT//------------------------------------//
 func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
-	return nil
+	// Get Id from Params
+	id, err := getID(r)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.DeleteAccount(id); err != nil {
+		return err
+	}
+
+	return utils.WriteJSON(w, http.StatusOK, map[string]int{"deleted": id})
 }
 
+// -------------------------------------------------------//TRANSFER//---------------------------------------//
 func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-	return nil
+	transferReq := new(types.TransferRequest)
+	if err := json.NewDecoder(r.Body).Decode(transferReq); err != nil {
+		return err
+	}
+
+	defer r.Body.Close()
+
+	return utils.WriteJSON(w, http.StatusOK, transferReq)
 }
 
-// --------------------------------------------------//TURN DATA INTO JSON//------------------------------------//
-func WriteJSON(w http.ResponseWriter, status int, v any) error {
-	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(status)
-	return json.NewEncoder(w).Encode((v))
+// -----------------------------------------------------//JWT//--------------------------------------------//
+
+func WithJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("calling jwt middleware")
+
+		tokenString := r.Header.Get("x-jwt-token")
+
+		_, err := utils.ValidateJWT(tokenString)
+
+		if err != nil {
+			utils.WriteJSON(w, http.StatusForbidden, ApiError{Error: "invalid token"})
+			return
+		}
+
+		handlerFunc(w, r)
+	}
 }
 
-// --------------------------------------------------//SETUP SERVER//--------------------------------------------//
 type apiFunc func(http.ResponseWriter, *http.Request) error
 
 type ApiError struct {
-	Error string
+	Error string `json:"error"`
 }
 
 func makeHttpHandleFunc(f apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := f(w, r); err != nil {
 			// Handle The Error
-			WriteJSON(w, http.StatusBadRequest, ApiError{Error: err.Error()})
+			utils.WriteJSON(w, http.StatusBadRequest, ApiError{Error: err.Error()})
 		}
 	}
+}
+
+func getID(r *http.Request) (int, error) {
+	// Get Id From Params
+	idStr := mux.Vars(r)["id"]
+	id, err := strconv.Atoi(idStr)
+
+	if err != nil {
+		return id, fmt.Errorf("invalid id given %s", idStr)
+	}
+
+	return id, nil
 }
