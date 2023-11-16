@@ -1,0 +1,3 @@
+build: @go build -o bin/villain_api
+run: build @./bin/villain_api
+test: @go test -v ./...
