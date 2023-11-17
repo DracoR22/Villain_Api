@@ -11,6 +11,7 @@ import (
 	"github.com/DracoR22/villain_api/app/types"
 	"github.com/DracoR22/villain_api/app/utils"
 	"github.com/DracoR22/villain_api/storage"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 )
 
@@ -32,7 +33,7 @@ func (s *APIServer) Run() {
 
 	// Accounts
 	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/{id}", WithJWTAuth(makeHttpHandleFunc(s.handleGetAccountByID)))
+	router.HandleFunc("/account/{id}", withJWTAuth(makeHttpHandleFunc(s.handleGetAccountByID), s.store))
 
 	// Transfer
 	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer))
@@ -68,7 +69,7 @@ func (s *APIServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) er
 func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request) error {
 	if r.Method == "GET" {
 
-		// Get Id from Params
+		// Get Id From Params
 		id, err := getID(r)
 		if err != nil {
 			return err
@@ -92,6 +93,7 @@ func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request)
 
 // ---------------------------------------------------//CREATE ACCOUNT//-------------------------------------//
 func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
+	// Get The Req.Body
 	CreateAccountReq := new(types.CreateAccountRequest)
 	if err := json.NewDecoder(r.Body).Decode(CreateAccountReq); err != nil {
 		return err
@@ -107,12 +109,19 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 
+	tokenString, err := utils.CreateJWT(account)
+	if err != nil {
+		return nil
+	}
+
+	fmt.Println("JWT token: ", tokenString)
+
 	return utils.WriteJSON(w, http.StatusOK, account)
 }
 
 // ---------------------------------------------------//DELETE ACCOUNT//------------------------------------//
 func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
-	// Get Id from Params
+	// Get Id From Params
 	id, err := getID(r)
 	if err != nil {
 		return err
@@ -137,16 +146,41 @@ func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 	return utils.WriteJSON(w, http.StatusOK, transferReq)
 }
 
-// -----------------------------------------------------//JWT//--------------------------------------------//
+func permissionDenied(w http.ResponseWriter) {
+	utils.WriteJSON(w, http.StatusForbidden, ApiError{Error: "permission denied"})
+}
 
-func WithJWTAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
-
+// JWT MIDDLEWARE
+func withJWTAuth(handlerFunc http.HandlerFunc, s storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("calling jwt middleware")
+		fmt.Println("calling JWT auth middleware")
 
 		tokenString := r.Header.Get("x-jwt-token")
+		token, err := utils.ValidateJWT(tokenString)
+		if err != nil {
+			permissionDenied(w)
+			return
+		}
+		if !token.Valid {
+			permissionDenied(w)
+			return
+		}
+		userID, err := getID(r)
+		if err != nil {
+			permissionDenied(w)
+			return
+		}
+		account, err := s.GetAccountByID(userID)
+		if err != nil {
+			permissionDenied(w)
+			return
+		}
 
-		_, err := utils.ValidateJWT(tokenString)
+		claims := token.Claims.(jwt.MapClaims)
+		if account.Number != int64(claims["accountNumber"].(float64)) {
+			permissionDenied(w)
+			return
+		}
 
 		if err != nil {
 			utils.WriteJSON(w, http.StatusForbidden, ApiError{Error: "invalid token"})

@@ -91,6 +91,20 @@ func (s *PostgresStore) DeleteAccount(id int) error {
 	return err
 }
 
+// GET ACCOUNT BY NUMBER
+func (s *PostgresStore) GetAccountByNumber(number int) (*types.Account, error) {
+	rows, err := s.db.Query("select * from account where number = $1", number)
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		return scanIntoAccount(rows)
+	}
+
+	return nil, fmt.Errorf("account with number [%d] not found", number)
+}
+
 // GET ACCOUNT BY ID FROM POSTGRES
 func (s *PostgresStore) GetAccountByID(id int) (*types.Account, error) {
 	rows, err := s.db.Query("select * from account where id = $1", id)
